@@ -19,6 +19,7 @@ client.on('connect', () => {
 });
 
 client.on('message', (topic, payload) => {
+    console.log('raw:', payload.slice(0, 32).toString('hex'));
     try {
         const entity = parseFeedMessage(payload);
         const v = entity?.vehicle;
@@ -37,7 +38,9 @@ client.on('message', (topic, payload) => {
             });
         }
         busCache = JSON.stringify(Array.from(vehicles.values()));
-    } catch (_) {}
+    } catch (e) {
+        console.error('parse error:', e.message);
+    }
 });
 
 client.on('disconnect', () => console.log('Disconnected, reconnecting...'));
