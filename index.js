@@ -19,9 +19,9 @@ client.on('connect', () => {
 });
 
 client.on('message', (topic, payload) => {
-    console.log('raw:', payload.slice(0, 32).toString('hex'));
     try {
-        const entity = parseFeedMessage(payload);
+        const buf = new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+        const entity = parseFeedMessage(buf);
         const v = entity?.vehicle;
         if (v?.position?.latitude != null) {
             const id = v.vid ?? entity.id;
