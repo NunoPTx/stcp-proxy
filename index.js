@@ -43,7 +43,6 @@ client.on('message', (topic, payload) => {
     }
 });
 
-client.on('disconnect', () => console.log('Disconnected, reconnecting...'));
 client.on('error', (e) => console.error('MQTT error:', e.message));
 
 // ── Protobuf parser ──────────────────────────────────────────
@@ -60,7 +59,12 @@ class PBReader {
         return result;
     }
     readTag()    { const t = this.readVarint(); return { fieldNum: Number(t >> 3n), wireType: Number(t & 0x7n) }; }
-    readBytes()  { const len = Number(this.readVarint()); const out = this.buf.slice(this.pos, this.pos + len); this.pos += len; return out; }
+    readBytes()  { 
+        const len = Number(this.readVarint()); 
+        const out = new Uint8Array(this.buf.buffer, this.buf.byteOffset + this.pos, len);
+        this.pos += len; 
+        return out; 
+    }
     readString() { return new TextDecoder().decode(this.readBytes()); }
     readFloat()  { const v = new DataView(this.buf.buffer, this.buf.byteOffset + this.pos, 4).getFloat32(0, true); this.pos += 4; return v; }
     readDouble() { const v = new DataView(this.buf.buffer, this.buf.byteOffset + this.pos, 8).getFloat64(0, true); this.pos += 8; return v; }
@@ -181,6 +185,6 @@ http.createServer(async (req, res) => {
         res.writeHead(503, CORS);
         res.end('{"error":"no data yet"}');
     }
-}).listen(process.env.PORT || 3000, () => {
-    console.log('HTTP server listening on port', process.env.PORT || 3000);
+}).listen(process.env.PORT || 8080, () => {
+    console.log('HTTP server listening on port', process.env.PORT || 8080);
 });
