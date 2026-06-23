@@ -1,10 +1,18 @@
 const http = require('http');
 const mqtt = require('mqtt');
 
-let busCache = null;
-const vehicles = new Map();
+const vehicles = new Map();      // id -> vehicle data
+const missedUpdates = new Map(); // id -> consecutive missed update count
+const MAX_MISSED = 2;
 
-// ── exact protobuf parser from the working Cloudflare worker ──
+let busCache = null;
+let updateCycle = 0;
+
+function rebuildCache() {
+    busCache = JSON.stringify(Array.from(vehicles.values()));
+}
+
+// ── Protobuf parser ──────────────────────────────────────────
 class PBReader {
     constructor(buf) { this.buf = buf; this.pos = 0; }
     readVarint() {
@@ -17,7 +25,7 @@ class PBReader {
         }
         return result;
     }
-    readTag() { const tag = this.readVarint(); return { fieldNum: Number(tag >> 3n), wireType: Number(tag & 0x7n) }; }
+    readTag()    { const tag = this.readVarint(); return { fieldNum: Number(tag >> 3n), wireType: Number(tag & 0x7n) }; }
     skip(wireType) {
         switch (wireType) {
             case 0: this.readVarint(); break;
@@ -27,11 +35,11 @@ class PBReader {
             default: throw new Error('Unknown wire type ' + wireType);
         }
     }
-    readBytes() { const len = Number(this.readVarint()); const out = Buffer.from(this.buf).slice(this.pos, this.pos + len); this.pos += len; return out; }
+    readBytes()  { const len = Number(this.readVarint()); const out = Buffer.from(this.buf).slice(this.pos, this.pos + len); this.pos += len; return out; }
     readString() { return this.readBytes().toString('utf8'); }
-    readFloat() { const v = this.buf.readFloatLE(this.pos); this.pos += 4; return v; }
+    readFloat()  { const v = this.buf.readFloatLE(this.pos); this.pos += 4; return v; }
     readDouble() { const v = this.buf.readDoubleLE(this.pos); this.pos += 8; return v; }
-    eof() { return this.pos >= this.buf.length; }
+    eof()        { return this.pos >= this.buf.length; }
 }
 
 function parseVehiclePosition(buf) {
@@ -49,7 +57,7 @@ function parseEntity(buf) {
     const out = { id: null, vehicle: null };
     while (!reader.eof()) {
         const { fieldNum, wireType } = reader.readTag();
-        if (fieldNum === 1 && wireType === 2) out.id = reader.readString();
+        if      (fieldNum === 1 && wireType === 2) out.id = reader.readString();
         else if (fieldNum === 4 && wireType === 2) out.vehicle = parseVehicle(reader.readBytes());
         else reader.skip(wireType);
     }
@@ -60,10 +68,10 @@ function parseVehicle(buf) {
     const out = { trip: null, position: null, timestamp: null, vehicle: null };
     while (!reader.eof()) {
         const { fieldNum, wireType } = reader.readTag();
-        if (fieldNum === 1 && wireType === 2) out.trip = parseTrip(reader.readBytes());
-        else if (fieldNum === 2 && wireType === 2) out.position = parsePosition(reader.readBytes());
+        if      (fieldNum === 1 && wireType === 2) out.trip      = parseTrip(reader.readBytes());
+        else if (fieldNum === 2 && wireType === 2) out.position  = parsePosition(reader.readBytes());
         else if (fieldNum === 5 && wireType === 0) out.timestamp = Number(reader.readVarint());
-        else if (fieldNum === 8 && wireType === 2) out.vehicle = parseVehicleDescriptor(reader.readBytes());
+        else if (fieldNum === 8 && wireType === 2) out.vehicle   = parseVehicleDescriptor(reader.readBytes());
         else reader.skip(wireType);
     }
     return out;
@@ -73,8 +81,8 @@ function parseTrip(buf) {
     const out = { tripId: null, routeId: null, directionId: null };
     while (!reader.eof()) {
         const { fieldNum, wireType } = reader.readTag();
-        if (fieldNum === 1 && wireType === 2) out.tripId = reader.readString();
-        else if (fieldNum === 5 && wireType === 2) out.routeId = reader.readString();
+        if      (fieldNum === 1 && wireType === 2) out.tripId      = reader.readString();
+        else if (fieldNum === 5 && wireType === 2) out.routeId     = reader.readString();
         else if (fieldNum === 6 && wireType === 0) out.directionId = Number(reader.readVarint());
         else reader.skip(wireType);
     }
@@ -85,10 +93,10 @@ function parsePosition(buf) {
     const out = { latitude: null, longitude: null, bearing: null, speed: null };
     while (!reader.eof()) {
         const { fieldNum, wireType } = reader.readTag();
-        if (fieldNum === 1 && wireType === 5) out.latitude = reader.readFloat();
+        if      (fieldNum === 1 && wireType === 5) out.latitude  = reader.readFloat();
         else if (fieldNum === 2 && wireType === 5) out.longitude = reader.readFloat();
-        else if (fieldNum === 3 && wireType === 5) out.bearing = reader.readFloat();
-        else if (fieldNum === 5 && wireType === 5) out.speed = reader.readFloat();
+        else if (fieldNum === 3 && wireType === 5) out.bearing   = reader.readFloat();
+        else if (fieldNum === 5 && wireType === 5) out.speed     = reader.readFloat();
         else reader.skip(wireType);
     }
     return out;
@@ -119,12 +127,17 @@ client.on('connect', () => {
     client.subscribe('/gtfsrt/vp/2///BUS/#');
 });
 
+// Track which vehicles were seen this cycle
+let seenThisCycle = new Set();
+let cycleTimer = null;
+
 client.on('message', (topic, payload) => {
     try {
         const entity = parseVehiclePosition(payload);
         const v = entity?.vehicle;
         if (v?.position?.latitude != null && v?.position?.longitude != null) {
             const id = v.vehicle?.id || entity.id;
+            seenThisCycle.add(id);
             vehicles.set(id, {
                 id,
                 directionId:    v.trip?.directionId ?? null,
@@ -137,11 +150,29 @@ client.on('message', (topic, payload) => {
                 timestamp:      v.timestamp         ?? null,
                 tripId:         v.trip?.tripId      ?? null
             });
+            missedUpdates.set(id, 0); // reset missed counter
         }
-        busCache = JSON.stringify(Array.from(vehicles.values()));
-    } catch (e) {
-        console.error('parse error:', e.message);
-    }
+    } catch (e) {}
+
+    // Debounce: after 3s of no new messages, consider the cycle done
+    clearTimeout(cycleTimer);
+    cycleTimer = setTimeout(() => {
+        // Increment missed count for vehicles not seen this cycle
+        for (const id of vehicles.keys()) {
+            if (!seenThisCycle.has(id)) {
+                const missed = (missedUpdates.get(id) ?? 0) + 1;
+                if (missed >= MAX_MISSED) {
+                    vehicles.delete(id);
+                    missedUpdates.delete(id);
+                } else {
+                    missedUpdates.set(id, missed);
+                }
+            }
+        }
+        seenThisCycle = new Set();
+        rebuildCache();
+        console.log(`Cycle done. Active vehicles: ${vehicles.size}`);
+    }, 3000);
 });
 
 client.on('error', (e) => console.error('MQTT error:', e.message));
