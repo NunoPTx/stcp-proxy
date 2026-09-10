@@ -223,9 +223,11 @@ http.createServer(async (req, res) => {
         return;
     }
 
-    // /all-stops
+    // /all-stops?page=N
     if (url.pathname === '/all-stops') {
-        await proxyJson(res, `${STCP_BASE}/stops`);
+        const page = url.searchParams.get('page');
+        const target = page ? `${STCP_BASE}/stops?page=${page}` : `${STCP_BASE}/stops`;
+        await proxyJson(res, target);
         return;
     }
 
