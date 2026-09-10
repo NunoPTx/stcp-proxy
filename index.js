@@ -179,9 +179,66 @@ client.on('error', (e) => console.error('MQTT error:', e.message));
 
 // ── HTTP ──────────────────────────────────────────────────────
 const CORS = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+const STCP_BASE = 'https://stcp.pt/api';
+
+// Small helper: fetch a stcp.pt URL and pipe the JSON straight through,
+// with our own CORS headers attached (stcp.pt sends none).
+async function proxyJson(res, targetUrl) {
+    try {
+        const r = await fetch(targetUrl);
+        const data = await r.text();
+        res.writeHead(r.status, CORS);
+        res.end(data);
+    } catch (e) {
+        res.writeHead(502, CORS);
+        res.end(JSON.stringify({ error: e.message }));
+    }
+}
 
 http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+
+    // CORS preflight
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204, CORS);
+        res.end();
+        return;
+    }
+
+    // /route-shape/:line?direction_id=0
+    let m = url.pathname.match(/^\/route-shape\/([^/]+)$/);
+    if (m) {
+        const line = m[1];
+        const directionId = url.searchParams.get('direction_id') ?? '0';
+        await proxyJson(res, `${STCP_BASE}/route/${line}/shape?direction_id=${directionId}`);
+        return;
+    }
+
+    // /route-stops/:line?direction_id=0
+    m = url.pathname.match(/^\/route-stops\/([^/]+)$/);
+    if (m) {
+        const line = m[1];
+        const directionId = url.searchParams.get('direction_id') ?? '0';
+        await proxyJson(res, `${STCP_BASE}/route/${line}/stops/direction?direction_id=${directionId}`);
+        return;
+    }
+
+    // /all-stops
+    if (url.pathname === '/all-stops') {
+        await proxyJson(res, `${STCP_BASE}/stops`);
+        return;
+    }
+
+    // Reserved for future use — route metadata (names, color, headsigns per direction)
+    // /route-directions/:line
+    m = url.pathname.match(/^\/route-directions\/([^/]+)$/);
+    if (m) {
+        const line = m[1];
+        await proxyJson(res, `https://wab.stcp.pt/tracking/api/route-stops?route=${line}`);
+        return;
+    }
+
+    // Existing behaviour: ?stop=ID -> stop arrivals, otherwise -> live bus cache
     const stopId = url.searchParams.get('stop');
 
     if (stopId) {
