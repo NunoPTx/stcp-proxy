@@ -205,40 +205,51 @@ http.createServer(async (req, res) => {
         return;
     }
 
-    // /route-shape/:line?direction_id=0
-    let m = url.pathname.match(/^\/route-shape\/([^/]+)$/);
+    // /route-full/:line?direction_id=0
+    // Single call: shape + ordered stops + headsign + route metadata, all from wab.stcp.pt.
+    // Replaces the old separate /route-shape and /route-stops calls to stcp.pt.
+    let m = url.pathname.match(/^\/route-full\/([^/]+)$/);
     if (m) {
         const line = m[1];
         const directionId = url.searchParams.get('direction_id') ?? '0';
-        await proxyJson(res, `${STCP_BASE}/route/${line}/shape?direction_id=${directionId}`);
+        await proxyJson(res, `https://wab.stcp.pt/tracking/api/route-stops?route=${line}&direction=${directionId}`);
         return;
     }
 
-    // /route-stops/:line?direction_id=0
-    m = url.pathname.match(/^\/route-stops\/([^/]+)$/);
-    if (m) {
-        const line = m[1];
-        const directionId = url.searchParams.get('direction_id') ?? '0';
-        await proxyJson(res, `${STCP_BASE}/route/${line}/stops/direction?direction_id=${directionId}`);
-        return;
-    }
-
-    // /all-stops?page=N
-    if (url.pathname === '/all-stops') {
-        const page = url.searchParams.get('page');
-        const target = page ? `${STCP_BASE}/stops?page=${page}` : `${STCP_BASE}/stops`;
-        await proxyJson(res, target);
-        return;
-    }
-
-    // Reserved for future use — route metadata (names, color, headsigns per direction)
     // /route-directions/:line
+    // Lightweight: just the two headsigns for a line (no shape/stops payload).
     m = url.pathname.match(/^\/route-directions\/([^/]+)$/);
     if (m) {
         const line = m[1];
         await proxyJson(res, `https://wab.stcp.pt/tracking/api/route-stops?route=${line}`);
         return;
     }
+
+    // /route-shape/:line?direction_id=0  [DISABLED — superseded by /route-full above]
+    // let m = url.pathname.match(/^\/route-shape\/([^/]+)$/);
+    // if (m) {
+    //     const line = m[1];
+    //     const directionId = url.searchParams.get('direction_id') ?? '0';
+    //     await proxyJson(res, `${STCP_BASE}/route/${line}/shape?direction_id=${directionId}`);
+    //     return;
+    // }
+
+    // /route-stops/:line?direction_id=0  [DISABLED — superseded by /route-full above]
+    // m = url.pathname.match(/^\/route-stops\/([^/]+)$/);
+    // if (m) {
+    //     const line = m[1];
+    //     const directionId = url.searchParams.get('direction_id') ?? '0';
+    //     await proxyJson(res, `${STCP_BASE}/route/${line}/stops/direction?direction_id=${directionId}`);
+    //     return;
+    // }
+
+    // /all-stops?page=N  [DISABLED — stcp.pt/api/stops pagination doesn't behave as documented; feature removed for now]
+    // if (url.pathname === '/all-stops') {
+    //     const page = url.searchParams.get('page');
+    //     const target = page ? `${STCP_BASE}/stops?page=${page}` : `${STCP_BASE}/stops`;
+    //     await proxyJson(res, target);
+    //     return;
+    // }
 
     // Existing behaviour: ?stop=ID -> stop arrivals, otherwise -> live bus cache
     const stopId = url.searchParams.get('stop');
