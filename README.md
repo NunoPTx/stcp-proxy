@@ -11,16 +11,8 @@ Real-time STCP bus positions via MQTT, displayed as a JSON HTTP API.
 
 ## Endpoints
 
-- `GET /` — all active bus positions
-- `GET /?stop={id}` — real-time arrivals for a specific stop ID
+* `GET /` — all active bus positions
+* `GET /?stop={id}` — real-time arrivals for a specific stop ID
+* `GET /route-full/{line}?direction_id={id}` — comprehensive shape, ordered stops, headsigns, and route metadata for a specific direction
+* `GET /route-directions/{line}` — lightweight headsigns for a specific line
 
-## What it shows
-
-- `id` — fleet ID
-- `directionId` — direction (0 or 1)
-- `routeId` — route number
-- `lat` / `lng` — position
-- `speed` — current speed in km/h
-- `bearing` — heading in degrees
-- `timestamp` — last update (Unix)
-- `tripId` — trip identifier
