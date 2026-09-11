@@ -1,8 +1,8 @@
 const http = require('http');
 const mqtt = require('mqtt');
 
-const vehicles = new Map();      // id -> vehicle data
-const missedUpdates = new Map(); // id -> consecutive missed update count
+const vehicles = new Map();
+const missedUpdates = new Map();
 const MAX_MISSED = 2;
 
 let busCache = null;
@@ -12,7 +12,6 @@ function rebuildCache() {
     busCache = JSON.stringify(Array.from(vehicles.values()));
 }
 
-// ── Protobuf parser ──────────────────────────────────────────
 class PBReader {
     constructor(buf) { this.buf = buf; this.pos = 0; }
     readVarint() {
@@ -112,7 +111,6 @@ function parseVehicleDescriptor(buf) {
     return out;
 }
 
-// ── MQTT ─────────────────────────────────────────────────────
 const client = mqtt.connect('wss://mmt.portodigital.pt/websocket/', {
     protocol: 'wss',
     wsOptions: { headers: { Origin: 'https://explore.porto.pt' } },
@@ -127,7 +125,6 @@ client.on('connect', () => {
     client.subscribe('/gtfsrt/vp/2///BUS/#');
 });
 
-// Track which vehicles were seen this cycle
 let seenThisCycle = new Set();
 let cycleTimer = null;
 
@@ -150,14 +147,13 @@ client.on('message', (topic, payload) => {
                 timestamp:      v.timestamp         ?? null,
                 tripId:         v.trip?.tripId      ?? null
             });
-            missedUpdates.set(id, 0); // reset missed counter
+            missedUpdates.set(id, 0);
         }
     } catch (e) {}
 
-    // Debounce: after 3s of no new messages, consider the cycle done
     clearTimeout(cycleTimer);
     cycleTimer = setTimeout(() => {
-        // Increment missed count for vehicles not seen this cycle
+
         for (const id of vehicles.keys()) {
             if (!seenThisCycle.has(id)) {
                 const missed = (missedUpdates.get(id) ?? 0) + 1;
@@ -177,12 +173,9 @@ client.on('message', (topic, payload) => {
 
 client.on('error', (e) => console.error('MQTT error:', e.message));
 
-// ── HTTP ──────────────────────────────────────────────────────
 const CORS = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 const STCP_BASE = 'https://stcp.pt/api';
 
-// Small helper: fetch a stcp.pt URL and pipe the JSON straight through,
-// with our own CORS headers attached (stcp.pt sends none).
 async function proxyJson(res, targetUrl) {
     try {
         const r = await fetch(targetUrl);
@@ -198,16 +191,12 @@ async function proxyJson(res, targetUrl) {
 http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    // CORS preflight
     if (req.method === 'OPTIONS') {
         res.writeHead(204, CORS);
         res.end();
         return;
     }
 
-    // /route-full/:line?direction_id=0
-    // Single call: shape + ordered stops + headsign + route metadata, all from wab.stcp.pt.
-    // Replaces the old separate /route-shape and /route-stops calls to stcp.pt.
     let m = url.pathname.match(/^\/route-full\/([^/]+)$/);
     if (m) {
         const line = m[1];
@@ -216,8 +205,6 @@ http.createServer(async (req, res) => {
         return;
     }
 
-    // /route-directions/:line
-    // Lightweight: just the two headsigns for a line (no shape/stops payload).
     m = url.pathname.match(/^\/route-directions\/([^/]+)$/);
     if (m) {
         const line = m[1];
@@ -225,33 +212,6 @@ http.createServer(async (req, res) => {
         return;
     }
 
-    // /route-shape/:line?direction_id=0  [DISABLED — superseded by /route-full above]
-    // let m = url.pathname.match(/^\/route-shape\/([^/]+)$/);
-    // if (m) {
-    //     const line = m[1];
-    //     const directionId = url.searchParams.get('direction_id') ?? '0';
-    //     await proxyJson(res, `${STCP_BASE}/route/${line}/shape?direction_id=${directionId}`);
-    //     return;
-    // }
-
-    // /route-stops/:line?direction_id=0  [DISABLED — superseded by /route-full above]
-    // m = url.pathname.match(/^\/route-stops\/([^/]+)$/);
-    // if (m) {
-    //     const line = m[1];
-    //     const directionId = url.searchParams.get('direction_id') ?? '0';
-    //     await proxyJson(res, `${STCP_BASE}/route/${line}/stops/direction?direction_id=${directionId}`);
-    //     return;
-    // }
-
-    // /all-stops?page=N  [DISABLED — stcp.pt/api/stops pagination doesn't behave as documented; feature removed for now]
-    // if (url.pathname === '/all-stops') {
-    //     const page = url.searchParams.get('page');
-    //     const target = page ? `${STCP_BASE}/stops?page=${page}` : `${STCP_BASE}/stops`;
-    //     await proxyJson(res, target);
-    //     return;
-    // }
-
-    // Existing behaviour: ?stop=ID -> stop arrivals, otherwise -> live bus cache
     const stopId = url.searchParams.get('stop');
 
     if (stopId) {
