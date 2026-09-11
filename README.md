@@ -2,7 +2,7 @@
 
 Real-time STCP bus positions via MQTT, displayed as a JSON HTTP API.
 
-**URL:** https://stcp-proxy-production.up.railway.app
+**URL:** https://stcp-proxy.onrender.com/
 
 ## Content
 
