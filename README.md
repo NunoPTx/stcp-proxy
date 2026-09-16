@@ -1,6 +1,6 @@
 # stcp-proxy
 
-Real-time STCP bus positions via MQTT, displayed as a JSON HTTP API.
+STCP API proxy with real-time MQTT bus positions and static GTFS route data in JSON endpoints.
 
 **BASE URL:** https://stcp-proxy.onrender.com/
 
