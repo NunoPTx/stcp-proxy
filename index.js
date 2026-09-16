@@ -149,7 +149,9 @@ client.on('message', (topic, payload) => {
             });
             missedUpdates.set(id, 0);
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error('Error parsing GTFS-RT payload:', e.message);
+    }
 
     clearTimeout(cycleTimer);
     cycleTimer = setTimeout(() => {
@@ -174,7 +176,6 @@ client.on('message', (topic, payload) => {
 client.on('error', (e) => console.error('MQTT error:', e.message));
 
 const CORS = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-const STCP_BASE = 'https://stcp.pt/api';
 
 async function proxyJson(res, targetUrl) {
     try {
