@@ -174,6 +174,7 @@ const TESTS = {
     test6: { filter: '/gtfsrt/vp/2///+/#',      desc: 'vp: operator 2, any mode' },
     test7: { filter: '/gtfsrt/vp/+///BUS/#',    desc: 'vp: any operator, BUS' },
     test8: { filter: '/gtfsrt/#',               desc: 'EVERYTHING under /gtfsrt (heavy, shows other feeds too)' },
+    test9: { filter: '#', desc: 'literally every topic on the broker' },
 };
 
 const SAMPLE_LIMIT = 20;
