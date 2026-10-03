@@ -4,7 +4,9 @@ const mqtt = require('mqtt');
 const vehicles = new Map();
 const missedUpdates = new Map();
 const MAX_MISSED = 2;
+
 let busCache = null;
+let updateCycle = 0;
 
 function rebuildCache() {
     busCache = JSON.stringify(Array.from(vehicles.values()));
@@ -109,152 +111,6 @@ function parseVehicleDescriptor(buf) {
     return out;
 }
 
-function isPrintable(buf) {
-    if (!buf.length) return false;
-    const s = buf.toString('utf8');
-    return !s.includes('\uFFFD') && /^[\x20-\x7e\u00a0-\uffff]+$/.test(s);
-}
-
-function dumpProto(buf, depth = 0) {
-    const r = new PBReader(buf);
-    const out = [];
-    try {
-        while (!r.eof()) {
-            const { fieldNum, wireType } = r.readTag();
-            if (fieldNum < 1) return null;
-            let value;
-            switch (wireType) {
-                case 0: value = r.readVarint().toString(); break;
-                case 1: value = { f64: r.readDouble() }; break;
-                case 5: {
-                    const p = r.pos;
-                    value = { f32: r.buf.readFloatLE(p), u32: r.buf.readUInt32LE(p) };
-                    r.pos += 4;
-                    break;
-                }
-                case 2: {
-                    const bytes = r.readBytes();
-                    if (isPrintable(bytes)) value = bytes.toString('utf8');
-                    else {
-                        const nested = depth < 8 ? dumpProto(bytes, depth + 1) : null;
-                        value = nested && nested.length ? nested : { hex: bytes.toString('hex') };
-                    }
-                    break;
-                }
-                default: return null;
-            }
-            if (r.pos > buf.length) return null;
-            out.push({ field: fieldNum, wire: wireType, value });
-        }
-    } catch { return null; }
-    return out;
-}
-
-function topicMatches(filter, topic) {
-    const f = filter.split('/'), t = topic.split('/');
-    for (let i = 0; i < f.length; i++) {
-        if (f[i] === '#') return true;
-        if (i >= t.length) return false;
-        if (f[i] !== '+' && f[i] !== t[i]) return false;
-    }
-    return f.length === t.length;
-}
-
-function topicInfo(topic) {
-    const p = topic.split('/');
-    return { feed: p[2] ?? '?', operator: p[3] ?? '?', mode: p[6] ?? '?' };
-}
-
-const TESTS = {
-    test1: { filter: '/gtfsrt/vp/#',            desc: 'vp: ALL operators + modes' },
-    test2: { filter: '/gtfsrt/tu/#',            desc: 'tu: ALL operators + modes' },
-    test3: { filter: '/gtfsrt/tu/2///BUS/#',    desc: 'tu: operator 2, BUS (guessed pattern)' },
-    test4: { filter: '/gtfsrt/vp/1///SUBWAY/#', desc: 'vp: operator 1, SUBWAY (metro)' },
-    test5: { filter: '/gtfsrt/tu/1///SUBWAY/#', desc: 'tu: operator 1, SUBWAY (guessed pattern)' },
-    test6: { filter: '/gtfsrt/vp/2///+/#',      desc: 'vp: operator 2, any mode' },
-    test7: { filter: '/gtfsrt/vp/+///BUS/#',    desc: 'vp: any operator, BUS' },
-    test8: { filter: '/gtfsrt/#',               desc: 'EVERYTHING under /gtfsrt (heavy, shows other feeds too)' },
-    test9: { filter: '#', desc: 'literally every topic on the broker' },
-};
-
-const SAMPLE_LIMIT = 20;
-for (const [name, t] of Object.entries(TESTS)) {
-    t.name = name;
-    t.active = false;
-    t.reset = function () {
-        this.count = 0; this.bytes = 0;
-        this.firstAt = null; this.lastAt = null;
-        this.breakdown = new Map();
-        this.samples = [];
-    };
-    t.reset();
-}
-
-function recordTestMessage(topic, payload) {
-    const now = Date.now();
-    const info = topicInfo(topic);
-    const key = `${info.feed}|op=${info.operator}|mode=${info.mode}`;
-    for (const t of Object.values(TESTS)) {
-        if (!t.active || !topicMatches(t.filter, topic)) continue;
-        t.count++;
-        t.bytes += payload.length;
-        t.firstAt ??= now;
-        t.lastAt = now;
-        t.breakdown.set(key, (t.breakdown.get(key) ?? 0) + 1);
-        t.samples.push({ topic, at: now, payload });
-        if (t.samples.length > SAMPLE_LIMIT) t.samples.shift();
-    }
-}
-
-function activateTest(t) {
-    if (t.active) return;
-    t.active = true;
-    client.subscribe(t.filter, (err) => {
-        if (err) { console.error(`[${t.name}] subscribe failed:`, err.message); t.active = false; }
-        else console.log(`[${t.name}] subscribed ${t.filter}`);
-    });
-}
-
-function deactivateTest(t) {
-    if (!t.active) return;
-    t.active = false;
-    const stillUsed = Object.values(TESTS).some(o => o !== t && o.active && o.filter === t.filter) || t.filter === BUS_FILTER;
-    if (!stillUsed) client.unsubscribe(t.filter);
-    console.log(`[${t.name}] stopped`);
-}
-
-function testReport(t, limit) {
-    const samples = t.samples.slice(-limit).map(s => {
-        const info = topicInfo(s.topic);
-        let decoded = null;
-        if (info.feed === 'vp') {
-            try { decoded = parseVehiclePosition(s.payload); } catch {}
-        }
-        return {
-            topic: s.topic,
-            at: new Date(s.at).toISOString(),
-            bytes: s.payload.length,
-            decodedAsVehiclePosition: decoded,
-            generic: dumpProto(s.payload),
-            base64: s.payload.toString('base64')
-        };
-    });
-    return {
-        test: t.name,
-        filter: t.filter,
-        desc: t.desc,
-        active: t.active,
-        messages: t.count,
-        bytes: t.bytes,
-        firstAt: t.firstAt && new Date(t.firstAt).toISOString(),
-        lastAt: t.lastAt && new Date(t.lastAt).toISOString(),
-        breakdown: Object.fromEntries([...t.breakdown.entries()].sort((a, b) => b[1] - a[1])),
-        samples
-    };
-}
-
-const BUS_FILTER = '/gtfsrt/vp/2///BUS/#';
-
 const client = mqtt.connect('wss://mmt.portodigital.pt/websocket/', {
     protocol: 'wss',
     wsOptions: { headers: { Origin: 'https://explore.porto.pt' } },
@@ -266,14 +122,13 @@ const client = mqtt.connect('wss://mmt.portodigital.pt/websocket/', {
 
 client.on('connect', () => {
     console.log('Connected');
-    client.subscribe(BUS_FILTER);
-    for (const t of Object.values(TESTS)) if (t.active) client.subscribe(t.filter);
+    client.subscribe('/gtfsrt/vp/2///BUS/#');
 });
 
 let seenThisCycle = new Set();
 let cycleTimer = null;
 
-function handleBusMessage(payload) {
+client.on('message', (topic, payload) => {
     try {
         const entity = parseVehiclePosition(payload);
         const v = entity?.vehicle;
@@ -300,6 +155,7 @@ function handleBusMessage(payload) {
 
     clearTimeout(cycleTimer);
     cycleTimer = setTimeout(() => {
+
         for (const id of vehicles.keys()) {
             if (!seenThisCycle.has(id)) {
                 const missed = (missedUpdates.get(id) ?? 0) + 1;
@@ -315,22 +171,11 @@ function handleBusMessage(payload) {
         rebuildCache();
         console.log(`Cycle done. Active vehicles: ${vehicles.size}`);
     }, 3000);
-}
-
-client.on('message', (topic, payload) => {
-    recordTestMessage(topic, payload);
-
-    if (topicMatches(BUS_FILTER, topic)) handleBusMessage(payload);
 });
 
 client.on('error', (e) => console.error('MQTT error:', e.message));
 
 const CORS = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-
-function sendJson(res, status, obj) {
-    res.writeHead(status, CORS);
-    res.end(JSON.stringify(obj, null, 2));
-}
 
 async function proxyJson(res, targetUrl) {
     try {
@@ -351,30 +196,6 @@ http.createServer(async (req, res) => {
         res.writeHead(204, CORS);
         res.end();
         return;
-    }
-
-    if (url.pathname === '/tests') {
-        return sendJson(res, 200, Object.values(TESTS).map(t => ({
-            test: t.name, filter: t.filter, desc: t.desc, active: t.active, messages: t.count
-        })));
-    }
-    if (url.pathname === '/tests/stop') {
-        Object.values(TESTS).forEach(deactivateTest);
-        return sendJson(res, 200, { stopped: 'all' });
-    }
-    let tm = url.pathname.match(/^\/(test\d+)(?:\/(stop|reset))?$/);
-    if (tm) {
-        const t = TESTS[tm[1]];
-        if (!t) return sendJson(res, 404, { error: `unknown test, see /tests` });
-        if (tm[2] === 'stop')  { deactivateTest(t); return sendJson(res, 200, { test: t.name, active: false }); }
-        if (tm[2] === 'reset') { t.reset();          return sendJson(res, 200, { test: t.name, reset: true }); }
-
-        const wasActive = t.active;
-        activateTest(t);
-        const limit = Math.min(parseInt(url.searchParams.get('n') ?? '3', 10) || 3, SAMPLE_LIMIT);
-        const report = testReport(t, limit);
-        if (!wasActive) report.note = 'just subscribed, reload in a few seconds';
-        return sendJson(res, 200, report);
     }
 
     let m = url.pathname.match(/^\/route-full\/([^/]+)$/);
