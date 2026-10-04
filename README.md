@@ -15,4 +15,5 @@ STCP API proxy with real-time MQTT bus positions and static GTFS route data in J
 * `GET /?stop={id}` - real-time arrivals for a specific stop ID
 * `GET /route-full/{line}?direction_id={id}` - shape points, ordered stops, headsigns, and route metadata for a specific direction
 * `GET /route-directions/{line}` - headsigns for a specific line
+* `GET /stops` - all stops
 
