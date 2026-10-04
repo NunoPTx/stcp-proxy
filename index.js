@@ -6,7 +6,6 @@ const missedUpdates = new Map();
 const MAX_MISSED = 2;
 
 let busCache = null;
-let updateCycle = 0;
 
 function rebuildCache() {
     busCache = JSON.stringify(Array.from(vehicles.values()));
@@ -210,6 +209,11 @@ http.createServer(async (req, res) => {
     if (m) {
         const line = m[1];
         await proxyJson(res, `https://wab.stcp.pt/tracking/api/route-stops?route=${line}`);
+        return;
+    }
+
+    if (url.pathname === '/stops') {
+        await proxyJson(res, `https://stcp.pt/api/stops?limit=5000`);
         return;
     }
 
