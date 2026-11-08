@@ -74,15 +74,17 @@ http.createServer(async (req, res) => {
                         ? payload.data
                         : [];
             const mappedVehicles = sourceVehicles.map(vehicle => ({
-                tripId: vehicle.vehicle_id,
-                routeid: vehicle.route_id,
-                directionid: vehicle.direction_id,
-                lat: vehicle.latitude,
-                lng: vehicle.longitude,
-                bearing: vehicle.bearing,
-                timestamp: vehicle.timestamp
-            }));
-            res.writeHead(200, CORS);
+                id: String(vehicle.vehicle_id ?? vehicle.id ?? ''),
+                directionId: vehicle.direction_id ?? vehicle.directionId ?? null,
+                routeId: String(vehicle.route_id ?? vehicle.routeId ?? ''),
+                routeShortName: String(vehicle.route_short_name ?? vehicle.routeShortName ?? vehicle.route_id ?? vehicle.routeId ?? ''),
+                lat: vehicle.latitude ?? vehicle.lat ?? null,
+                lng: vehicle.longitude ?? vehicle.lng ?? null,
+                speed: vehicle.speed ?? 0,
+                bearing: vehicle.bearing ?? 0,
+                timestamp: vehicle.timestamp ?? null,
+                tripId: vehicle.trip_id ?? vehicle.tripId ?? vehicle.vehicle_id ?? null
+            }));            res.writeHead(200, CORS);
             res.end(JSON.stringify(mappedVehicles));
         } catch (e) {
             res.writeHead(502, CORS);
